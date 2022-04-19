@@ -153,7 +153,7 @@ class VoIPCall:
                 # TODO: If no codecs are compatible then send error to PBX.
 
                 port = None
-                while port is Non
+                while port is None:
                     proposed = random.randint(self.phone.rtpPortLow,
                                               self.phone.rtpPortHigh)
                     if proposed not in self.phone.assignedPorts:

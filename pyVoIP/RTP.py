@@ -12,7 +12,6 @@ import netaddr
 import threading
 import time
 
-
 __all__ = [
     'add_bytes', 'byte_to_bits', 'DynamicPayloadType', 'PayloadType',
     'RTPParseError', 'RTPProtocol', 'RTPPacketManager', 'RTPClient',
@@ -51,7 +50,6 @@ class RTPProtocol(Enum):
     AVP = 'RTP/AVP'
     SAVP = 'RTP/SAVP'
     AVPF = 'RTP/AVPF'
-
 
 
 class TransmitType(Enum):
@@ -99,7 +97,6 @@ class PayloadType(Enum):
     def description(self, value: str) -> None:
         self._description = value
 
-
     def __int__(self) -> int:
         try:
             return int(self.value)
@@ -145,7 +142,7 @@ class PayloadType(Enum):
 
     # Non-codec
     EVENT = "telephone-event", 8000, 0, "telephone-event"
-    UNKOWN = "UNKNOWN", 0, 0, "UNKNOWN CODEC"
+    UNKNOWN = "UNKNOWN", 0, 0, "UNKNOWN CODEC"
 
 
 class RTPPacketManager:
@@ -161,7 +158,6 @@ class RTPPacketManager:
         self.rebuilding = False
 
     def read(self, length: int = 160) -> bytes:
-
         # Attention: many calls
         # debug(f'{self.__class__.__name__}.{inspect.stack()[0][3]} called from '
         #      f'{inspect.stack()[1][0].f_locals["self"].__class__.__name__}.{inspect.stack()[1][3]} start')

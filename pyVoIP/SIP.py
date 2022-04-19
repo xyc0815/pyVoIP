@@ -388,7 +388,6 @@ class SIPMessage:
         data += "Body:\n"
         for x in self.body:
             data += f"{x}: {self.body[x]}\n"
-
         return data
 
     def parse(self, data: bytes) -> None:
@@ -782,7 +781,7 @@ class SIPClient:
         self.callCallback = callCallback
 
         self.tags: List[str] = []
-        self.tagLibrary = {'register': self.genTag()}
+        self.tagLibrary = {'register': self.gen_tag()}
 
         self.myPort = myPort
         self.my_public_port = None
@@ -1376,7 +1375,8 @@ class SIPClient:
         self.send_message(invite)
         debug('Invited')
         response = SIPMessage(self.s.recv(8192))
-        debug(f"{self.__class__.__name__}.{inspect.stack()[0][3]} <-- received Message invite 1\n----\n{response.raw}\n----\n")
+        debug(f"{self.__class__.__name__}.{inspect.stack()[0][3]} <-- received Message invite 1\n----\n"
+              f"{response.raw}\n----\n")
 
         while ((response.status != SIPStatus(401) and
                 response.status != SIPStatus(100) and
@@ -1386,7 +1386,8 @@ class SIPClient:
                 break
             self.parse_message(response)
             response = SIPMessage(self.s.recv(8192))
-            debug(f"{self.__class__.__name__}.{inspect.stack()[0][3]} <-- received Message invite 2\n----\n{response.raw}\n----\n")
+            debug(f"{self.__class__.__name__}.{inspect.stack()[0][3]} <-- received Message invite 2\n----\n"
+                  f"{response.raw}\n----\n")
 
         if (response.status == SIPStatus(100) or
            response.status == SIPStatus(180)):
