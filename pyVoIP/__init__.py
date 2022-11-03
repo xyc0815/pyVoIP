@@ -6,8 +6,9 @@ __version__ = ".".join([str(x) for x in version_info])
 
 DEBUG = True
 
+TRANSMIT_DELAY_REDUCTION = 0.0
 
-
+# ALL < DEBUG < INFO < WARN < ERROR < FATAL < OFF.
 def debug(s, e=None):
     if DEBUG:
         print(s)

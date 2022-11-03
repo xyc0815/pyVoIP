@@ -1,5 +1,5 @@
 from enum import Enum
-from pyVoIP import SIP, RTP
+from pyVoIP import SIP, RTP, Connections
 from threading import Timer, Lock
 from typing import Any, Callable, Dict, List, Optional
 import io
@@ -47,7 +47,7 @@ class VoIPCall:
                  request: SIP.SIPMessage, session_id: int,
                  ms: Optional[Dict[int, RTP.PayloadType]] = None,
                  sendmode="sendonly"):
-        debug(f"{self.__class__.__name__}.{inspect.stack()[0][3]} {callstate}, {session_id}, {ms}, {sendmode}")
+        debug(f"{self.__class__.__name__}.{inspect.stack()[0][3]} VoIPCall __init__ {callstate}, {session_id}, {ms}, {sendmode}")
 
         self.state = callstate
         self.phone = phone
@@ -77,8 +77,7 @@ class VoIPCall:
             video = []
             for x in self.request.body['c']:
                 debug(f"{self.__class__.__name__}.{inspect.stack()[0][3]} connections c x = {x}")
-                if x['address_type'] == 'IP4':
-                    self.connections += x['address_count']
+                self.connections += x['address_count']
             for x in self.request.body['m']:
                 debug(f"{self.__class__.__name__}.{inspect.stack()[0][3]} connections m x = {x}")
                 if x['type'] == "audio":
@@ -156,11 +155,12 @@ class VoIPCall:
                 while port is None:
                     proposed = random.randint(self.phone.rtpPortLow,
                                               self.phone.rtpPortHigh)
+                    debug(f"{self.__class__.__name__}.{inspect.stack()[0][3]} proposed = {proposed}")
                     if proposed not in self.phone.assignedPorts:
                         self.phone.assignedPorts.append(proposed)
                         self.assignedPorts[proposed] = codecs
                         port = proposed
-                self.create_rtp_clients(codecs, self.phone.myIP, port, request,
+                self.create_rtp_clients(codecs, self.phone.sip_client.get_address(), port, request,
                                         i['port'])
         elif callstate == CallState.DIALING:
             if ms is None:
@@ -176,12 +176,11 @@ class VoIPCall:
                          baseport: int) -> None:
         debug(f'{self.__class__.__name__}.{inspect.stack()[0][3]} start')
         for ii in range(len(request.body['c'])):
-            if request.body['c'][ii]['address_type'] == 'IP4':
-                # TODO: Check IPv4/IPv6
-                c = RTP.RTPClient(codecs, ip, port,
-                                  request.body['c'][ii]['address'], baseport + ii,
-                                  self.sendmode, dtmf=self.dtmf_callback)
-                self.RTPClients.append(c)
+            c = RTP.RTPClient(codecs, ip, port,
+                              request.body['c'][ii]['address'], baseport + ii,
+                              self.sendmode)
+                              #self.sendmode, dtmf = self.dtmf_callback)
+            self.RTPClients.append(c)
 
     def dtmf_callback(self, code: str) -> None:
         debug(f'{self.__class__.__name__}.{inspect.stack()[0][3]} start')
@@ -273,6 +272,7 @@ class VoIPCall:
 
         for x in self.RTPClients:
             x.start()
+
         self.request.headers['Contact'] = request.headers['Contact']
         self.request.headers['To']['tag'] = request.headers['To']['tag']
         self.state = CallState.ANSWERED
@@ -369,10 +369,10 @@ class VoIPCall:
 
 class VoIPPhone:
 
-    def __init__(self, server: str, port: int, username: str, password: str,
-                 myIP="0.0.0.0", proxy=None,
+    def __init__(self, sip_server: Connections, username: str, password: str,
+                 sip_client: Connections, server_proxy: Connections = None,
                  callCallback: Optional[Callable[['VoIPCall'], None]] = None,
-                 sipPort=5060, rtpPortLow=10000, rtpPortHigh=20000):
+                 rtpPortLow=10000, rtpPortHigh=20000, behind_nat=False):
         if rtpPortLow > rtpPortHigh:
             raise InvalidRangeError("'rtpPortHigh' must be >= 'rtpPortLow'")
 
@@ -382,23 +382,22 @@ class VoIPPhone:
         self.assignedPorts: List[int] = []
         self.session_ids: List[int] = []
 
-        self.server = server
-        self.proxy = proxy
-        self.port = port
-        self.myIP = myIP
+        self.sip_server = sip_server
+        self.sip_client = sip_client
+        self.server_proxy = server_proxy
         self.username = username
         self.password = password
         self.callCallback = callCallback
         self._status = PhoneStatus.INACTIVE
+        self.behind_nat = behind_nat
 
         # "recvonly", "sendrecv", "sendonly", "inactive"
         self.sendmode = "sendrecv"
         self.recvmode = "sendrecv"
 
         self.calls: Dict[str, VoIPCall] = {}
-        self.sip = SIP.SIPClient(server, port, username, password,
-                                 myIP=self.myIP, proxy=self.proxy,
-                                 myPort=sipPort,
+        self.sip = SIP.SIPClient(self.sip_server, username, password,
+                                 self.sip_client, self.server_proxy,
                                  callCallback=self.callback)
 
     def callback(self, request: SIP.SIPMessage) -> None:
@@ -486,7 +485,7 @@ class VoIPPhone:
         if call_id not in self.calls:
             debug(f'{self.__class__.__name__}.{inspect.stack()[0][3]} Unknown/No call\n'
                   f'TODO: Add 481 here as server is probably waiting for an ACK')
-        self.calls[call_id].notFound(request)
+        self.calls[call_id].not_found(request)
         debug("Terminating Call")
         ack = self.sip.gen_ack(request)
         self.sip.send_message(ack)

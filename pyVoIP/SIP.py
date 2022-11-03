@@ -2,6 +2,7 @@ import traceback
 from enum import Enum, IntEnum
 from threading import Timer, Lock
 from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
+from pyVoIP.Connections import Connection
 import inspect
 import pyVoIP
 import hashlib
@@ -12,6 +13,7 @@ import time
 import uuid
 import select
 import re
+
 
 if TYPE_CHECKING:
     from pyVoIP import RTP
@@ -610,7 +612,7 @@ class SIPMessage:
                     d = data.split(':')
                     self.body[header] = {'method': d[0], 'key': d[1]}
                 else:
-                    self.body[header] = {'method': d}
+                    self.body[header] = {'method': data}
             elif header == "m":
                 # SDP 5.14 Media Descriptions
                 # m=<media> <port>/<number of ports> <proto> <fmt> ...
@@ -764,17 +766,21 @@ class SIPMessage:
 
 class SIPClient:
 
-    def __init__(self, server: str, port: int, username: str, password: str,
-                 myIP="0.0.0.0", proxy=None, myPort=5060,
+    def __init__(self, sip_server: Connection, username: str, password: str,
+                 sip_client: Connection, server_proxy: Connection,
                  callCallback: Optional[Callable[[SIPMessage],
                                                  None]] = None):
         self.NSD = False
         self.use_keep_alive = False
-        self.server = server
-        self.port = port
-        self.myIP = myIP
-        self.my_public_ip = None
-        self.proxy = proxy
+        # self.server = server
+        # self.port = port
+        # self.myIP = myIP
+        # self.my_public_ip = None
+        # self.proxy = proxy
+        self.sip_server = sip_server
+        self.sip_client = sip_client
+        self.server_proxy = server_proxy
+        self.sip_client_public: Connection = None
         self.username = username
         self.password = password
 
@@ -783,8 +789,8 @@ class SIPClient:
         self.tags: List[str] = []
         self.tagLibrary = {'register': self.gen_tag()}
 
-        self.myPort = myPort
-        self.my_public_port = None
+        # self.myPort = myPort
+        # self.my_public_port = None
 
         self.default_expires = 120
         self.register_timeout = 30
@@ -804,15 +810,19 @@ class SIPClient:
     def send_message(self, message: str) -> None:
         debug(f'{self.__class__.__name__}.{inspect.stack()[0][3]} called from '
               f'{inspect.stack()[1][0].f_locals["self"].__class__.__name__}.{inspect.stack()[1][3]} '
-              f'--> message sever {(self.proxy if self.proxy else self.server)} port {self.port}'
+              f'--> message sever '
+              f'{(self.server_proxy.get_address() if self.server_proxy else self.sip_server.get_address())} '
+              f'port {self.server_proxy.get_port() if self.server_proxy else self.sip_server.get_port()}'
               f'\n----\n{message}\n----\n')
-        self.out.sendto(message.encode('utf8'), ((self.proxy if self.proxy else self.server), self.port))
+        self.out.sendto(message.encode('utf8'),
+                        ((self.server_proxy.get_address() if self.server_proxy else self.sip_server.get_address()),
+                         (self.server_proxy.get_port() if self.server_proxy else self.sip_server.get_port())))
 
     def get_my_ip(self) -> str:
-        return self.my_public_ip if self.my_public_ip else self.myIP
+        return self.sip_client_public.get_address() if self.sip_client_public else self.sip_client.get_address()
 
     def get_my_port(self) -> str:
-        return self.my_public_port if self.my_public_port else self.myPort
+        return self.sip_client_public.get_port() if self.sip_client_public else self.sip_client.get_port()
 
     def recv(self) -> None:
         debug(f'{self.__class__.__name__}.{inspect.stack()[0][3]} called from '
@@ -912,13 +922,15 @@ class SIPClient:
     def start(self) -> None:
         debug(f'{self.__class__.__name__}.{inspect.stack()[0][3]} called from '
               f'{inspect.stack()[1][0].f_locals["self"].__class__.__name__}.{inspect.stack()[1][3]} start '
-              f'IP {self.myIP} Port {self.myPort}')
+              f'IP {self.sip_client.get_address()} Port {self.sip_client.get_port()}')
         if self.NSD:
             raise RuntimeError("Attempted to start already started SIPClient")
         self.NSD = True
-        self.s = socket.socket((socket.AF_INET if netaddr.valid_ipv4(self.myIP) else socket.AF_INET6),
+        # self.s = socket.socket((socket.AF_INET if netaddr.valid_ipv4(self.myIP) else socket.AF_INET6),
+        #                        socket.SOCK_DGRAM)
+        self.s = socket.socket((socket.AF_INET if self.sip_client.ip_type == "IPv4" else socket.AF_INET6),
                                socket.SOCK_DGRAM)
-        self.s.bind((self.myIP, self.myPort))
+        self.s.bind((self.sip_client.get_address(), self.sip_client.get_port()))
         self.out = self.s
         self.register()
         t = Timer(1, self.recv)
@@ -949,14 +961,14 @@ class SIPClient:
               f'{inspect.stack()[1][0].f_locals["self"].__class__.__name__}.{inspect.stack()[1][3]} start')
         hash = hashlib.sha256(str(self.callID.next()).encode('utf8'))
         hhash = hash.hexdigest()
-        return f"{hhash[0:32]}@{self.myIP}:{self.myPort}"
+        return f"{hhash[0:32]}@{self.sip_client.get_address()}:{self.sip_client.get_port()}"
 
     def gen_last_call_id(self) -> str:
         debug(f'{self.__class__.__name__}.{inspect.stack()[0][3]} called from '
               f'{inspect.stack()[1][0].f_locals["self"].__class__.__name__}.{inspect.stack()[1][3]} start')
         hash = hashlib.sha256(str(self.callID.current() - 1).encode('utf8'))
         hhash = hash.hexdigest()
-        return f"{hhash[0:32]}@{self.myIP}:{self.myPort}"
+        return f"{hhash[0:32]}@{self.sip_client.get_address()}:{self.sip_client.get_port()}"
 
     def gen_tag(self) -> str:
         debug(f'{self.__class__.__name__}.{inspect.stack()[0][3]} called from '
@@ -993,11 +1005,12 @@ class SIPClient:
     def gen_authorization(self, request):
         debug(f'{self.__class__.__name__}.{inspect.stack()[0][3]} called from '
               f'{inspect.stack()[1][0].f_locals["self"].__class__.__name__}.{inspect.stack()[1][3]} start')
+
         realm = request.authentication['realm']
         HA1 = self.username + ':' + realm + ':' + self.password
         HA1 = hashlib.md5(HA1.encode('utf8')).hexdigest()
         HA2 = "" + request.headers['CSeq']['method'] + ':sip:' + \
-              self.server + ';transport=UDP'
+              self.sip_server.get_address() + ';transport=UDP'
         HA2 = hashlib.md5(HA2.encode('utf8')).hexdigest()
         nonce = request.authentication['nonce']
         response = (HA1 + ':' + nonce + ':' + HA2).encode('utf8')
@@ -1026,14 +1039,14 @@ class SIPClient:
     def gen_first_response(self, deregister=False) -> str:
         debug(f'{self.__class__.__name__}.{inspect.stack()[0][3]} called from '
               f'{inspect.stack()[1][0].f_locals["self"].__class__.__name__}.{inspect.stack()[1][3]} start')
-        regRequest = f'REGISTER sip:{self.server} SIP/2.0\r\n'
-        regRequest += f'Via: SIP/2.0/UDP {self.myIP}:{self.myPort};' + \
+        regRequest = f'REGISTER sip:{self.sip_server.get_address()} SIP/2.0\r\n'
+        regRequest += f'Via: SIP/2.0/UDP {self.sip_client.get_address()}:{self.sip_client.get_port()};' + \
                       f'branch={self.gen_branch()};rport\r\n'
         regRequest += f'From: "{self.username}" ' + \
-                      f'<sip:{self.username}@{self.server}>;tag=' + \
+                      f'<sip:{self.username}@{self.sip_server.get_address()}>;tag=' + \
                       f'{self.tagLibrary["register"]}\r\n'
         regRequest += f'To: "{self.username}" ' + \
-                      f'<sip:{self.username}@{self.server}>\r\n'
+                      f'<sip:{self.username}@{self.sip_server.get_address()}>\r\n'
         regRequest += f'Call-ID: {self.gen_call_id()}\r\n'
         regRequest += f'CSeq: {self.registerCounter.next()} REGISTER\r\n'
         regRequest += 'Contact: ' + \
@@ -1055,13 +1068,13 @@ class SIPClient:
     def gen_subscribe(self, response: SIPMessage) -> str:
         debug(f'{self.__class__.__name__}.{inspect.stack()[0][3]} called from '
               f'{inspect.stack()[1][0].f_locals["self"].__class__.__name__}.{inspect.stack()[1][3]} start')
-        subRequest = f'SUBSCRIBE sip:{self.username}@{self.server} SIP/2.0\r\n'
-        subRequest += f'Via: SIP/2.0/UDP {self.myIP}:{self.myPort};' + \
+        subRequest = f'SUBSCRIBE sip:{self.username}@{self.sip_server.get_address()} SIP/2.0\r\n'
+        subRequest += f'Via: SIP/2.0/UDP {self.sip_client.get_address()}:{self.sip_client.get_port()};' + \
                       f'branch={self.gen_branch()};rport\r\n'
         subRequest += f'From: "{self.username}" ' + \
-                      f'<sip:{self.username}@{self.server}>;tag=' + \
+                      f'<sip:{self.username}@{self.sip_server.get_address()}>;tag=' + \
                       f'{self.gen_tag()}\r\n'
-        subRequest += f'To: <sip:{self.username}@{self.server}>\r\n'
+        subRequest += f'To: <sip:{self.username}@{self.sip_server.get_address()}>\r\n'
         subRequest += f'Call-ID: {response.headers["Call-ID"]}\r\n'
         subRequest += f'CSeq: {self.subscribeCounter.next()} SUBSCRIBE\r\n'
         # TODO: check if transport is needed
@@ -1086,14 +1099,14 @@ class SIPClient:
         nonce = request.authentication['nonce']
         realm = request.authentication['realm']
 
-        regRequest = f'REGISTER sip:{self.server} SIP/2.0\r\n'
-        regRequest += f'Via: SIP/2.0/UDP {self.myIP}:{self.myPort};branch=' \
+        regRequest = f'REGISTER sip:{self.sip_server.get_address()} SIP/2.0\r\n'
+        regRequest += f'Via: SIP/2.0/UDP {self.sip_client.get_address()}:{self.sip_client.get_port()};branch=' \
                       f'{self.gen_branch()};rport\r\n'
         regRequest += f'From: "{self.username}" ' \
-                      f'<sip:{self.username}@{self.server}>;tag=' \
+                      f'<sip:{self.username}@{self.sip_server.get_address()}>;tag=' \
                       f'{self.tagLibrary["register"]}\r\n'
         regRequest += f'To: "{self.username}" ' \
-                      f'<sip:{self.username}@{self.server}>\r\n'
+                      f'<sip:{self.username}@{self.sip_server.get_address()}>\r\n'
         regRequest += f'Call-ID: {self.gen_call_id()}\r\n'
         regRequest += f'CSeq: {self.registerCounter.next()} REGISTER\r\n'
         regRequest += f'Contact: ' \
@@ -1108,7 +1121,7 @@ class SIPClient:
                       f'{self.default_expires if not deregister else 0}\r\n'
         regRequest += f'Authorization: Digest username="{self.username}",' + \
                       f'realm="{realm}",nonce="{nonce}",' + \
-                      f'uri="sip:{self.server};transport=UDP",' + \
+                      f'uri="sip:{self.sip_server.get_address()};transport=UDP",' + \
                       f'response="{response}",algorithm=MD5\r\n'
         regRequest += 'Content-Length: 0'
         regRequest += '\r\n\r\n'
@@ -1272,14 +1285,14 @@ class SIPClient:
         tag = self.gen_tag()
         self.tagLibrary[call_id] = tag
 
-        invRequest = f"INVITE sip:{number}@{self.server} SIP/2.0\r\n"
-        invRequest += f"Via: SIP/2.0/UDP {self.myIP}:{self.myPort};branch=" + \
+        invRequest = f"INVITE sip:{number}@{self.sip_server.get_address()} SIP/2.0\r\n"
+        invRequest += f"Via: SIP/2.0/UDP {self.sip_client.get_address()}:{self.sip_client.get_port()};branch=" + \
                       f"{branch}\r\n"
         invRequest += "Max-Forwards: 70\r\n"
         invRequest += "Contact: " + \
                       f"<sip:{self.username}@{self.get_my_ip()}:{self.get_my_port()}>\r\n"
-        invRequest += f"To: <sip:{number}@{self.server}>\r\n"
-        invRequest += f"From: <sip:{self.username}@{self.myIP}>;tag={tag}\r\n"
+        invRequest += f"To: <sip:{number}@{self.sip_server.get_address()}>\r\n"
+        invRequest += f"From: <sip:{self.username}@{self.sip_client.get_address()}>;tag={tag}\r\n"
         invRequest += f"Call-ID: {call_id}\r\n"
         invRequest += f"CSeq: {self.inviteCounter.next()} INVITE\r\n"
         invRequest += f"Allow: {(', '.join(pyVoIP.SIPCompatibleMethods))}\r\n"
@@ -1294,7 +1307,8 @@ class SIPClient:
         debug(f'{self.__class__.__name__}.{inspect.stack()[0][3]} called from '
               f'{inspect.stack()[1][0].f_locals["self"].__class__.__name__}.{inspect.stack()[1][3]} start')
         tag = self.tagLibrary[request.headers['Call-ID']]
-        c = request.headers['Contact'].strip('<').strip('>')
+        # sometimes the contact has something behind >
+        c = request.headers['Contact'].split(">", 1)[0].strip('<')
         byeRequest = f"BYE {c} SIP/2.0\r\n"
         byeRequest += self._gen_response_via_header(request)
         fromH = request.headers['From']['raw']
@@ -1400,7 +1414,7 @@ class SIPClient:
         nonce = response.authentication['nonce']
         realm = response.authentication['realm']
         auth = f'Authorization: Digest username="{self.username}",realm=' + \
-               f'"{realm}",nonce="{nonce}",uri="sip:{self.server};' + \
+               f'"{realm}",nonce="{nonce}",uri="sip:{self.sip_server.get_address()};' + \
                f'transport=UDP",response="{str(authhash, "utf8")}",' + \
                'algorithm=MD5\r\n'
 
@@ -1455,8 +1469,8 @@ class SIPClient:
                     debug("Unauthorized")
                     raise InvalidAccountInfoError("Invalid Username or " +
                                                   "Password for SIP server " +
-                                                  f"{self.server}:" +
-                                                  f"{self.myPort}")
+                                                  f"{self.sip_server.get_address()}:" +
+                                                  f"{self.sip_server.get_port()}")
                 elif response.status == SIPStatus(400):
                     # Bad Request
                     # TODO: implement
@@ -1496,10 +1510,12 @@ class SIPClient:
         response = SIPMessage(resp)
         if len(response.headers['Via']) > 0 and 'received' in response.headers['Via'][0] \
                 and 'rport' in response.headers['Via'][0]:
-            self.my_public_ip = response.headers['Via'][0]['received']
-            self.my_public_port = response.headers['Via'][0]['rport']
+            self.sip_client_public = Connection(response.headers['Via'][0]['received'],
+                                                response.headers['Via'][0]['rport'])
+            # self.my_public_ip = response.headers['Via'][0]['received']
+            # self.my_public_port = response.headers['Via'][0]['rport']
             debug(f"{self.__class__.__name__}.{inspect.stack()[0][3]} after received Message register 1"
-                  f" received {self.my_public_ip} rport {self.my_public_port}")
+                  f" received {self.sip_client_public.get_address()} rport {self.sip_client_public.get_port()}")
 
         if response.status == SIPStatus.TRYING:
             response = SIPMessage(self.s.recv(8192))
@@ -1526,8 +1542,8 @@ class SIPClient:
                     debug("Unauthorized")
                     raise InvalidAccountInfoError("Invalid Username or " +
                                                   "Password for SIP server " +
-                                                  f"{self.server}:" +
-                                                  f"{self.myPort}")
+                                                  f"{self.sip_server.get_address()}:" +
+                                                  f"{self.sip_server.get_port()}")
                 elif response.status == SIPStatus(400):
                     # Bad Request
                     # TODO: implement
@@ -1569,8 +1585,8 @@ class SIPClient:
             return True
         else:
             raise InvalidAccountInfoError("Invalid Username or Password for " +
-                                          f"SIP server {self.server}:" +
-                                          f"{self.myPort}")
+                                          f"SIP server {self.sip_server.get_address()}:" +
+                                          f"{self.sip_server.get_port()}")
 
     def check_for_new_register(self):
         debug(f'{self.__class__.__name__}.{inspect.stack()[0][3]} called from '
