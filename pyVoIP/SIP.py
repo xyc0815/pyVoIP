@@ -983,36 +983,50 @@ class SIPClient:
 
     # For more informations about creating the response please also see
     # https://datatracker.ietf.org/doc/html/draft-smith-sip-auth-examples-00
-    def gen_authorization(self, request):
+    def gen_authorization(self, request) -> str:
         debug('INFO', f'{self.__class__.__name__}.{inspect.stack()[0][3]} called from '
                       f'{inspect.stack()[1][0].f_locals["self"].__class__.__name__}.{inspect.stack()[1][3]} start')
-        realm = request.authentication['realm']
-        nonce = request.authentication['nonce']
 
-        ha1 = f'{self.username}:{realm}:{self.password}'
+        ha1 = f'{self.username}:{request.authentication["realm"]}:{self.password}'
         ha1 = hashlib.md5(ha1.encode('utf8')).hexdigest()
         ha2 = f'{request.headers["CSeq"]["method"]}:sip:{self.sip_server.get_address()};transport=UDP'
         ha2 = hashlib.md5(ha2.encode('utf8')).hexdigest()
 
         if request.authentication.get('qop') and ("auth" or "auth-int") in request.authentication.get('qop'):
-            cnonce = self.gen_tag()
+            request.authentication["cnonce"] = self.gen_tag()
             # For better use add as integer for the transfer send as hex with leading zeros.
             # example: nc="00000001"
-            nonce_count = self.nonce_count.next()
-            response = f'{ha1}:{nonce}:{nonce_count:08x}:{cnonce}:auth:{ha2}'.encode('utf8')
-            response = hashlib.md5(response).hexdigest().encode('utf8')
-            response = f'qop="auth",nc="{nonce_count:08x}",cnonce="{cnonce}",' \
-                       f'response="{str(response, "utf8")}"'
+            request.authentication["nonce_count"] = self.nonce_count.next()
+            response = f'{ha1}:{request.authentication["nonce"]}:{request.authentication["nonce_count"]:08x}:' \
+                       f'{request.authentication["cnonce"]}:auth:{ha2}'.encode('utf8')
+            request.authentication["response"] = hashlib.md5(response).hexdigest().encode('utf8')
         else:
-            response = f'{ha1}:{nonce}:{ha2}'.encode('utf8')
-            response = hashlib.md5(response).hexdigest().encode('utf8')
-            response = f'response="{str(response, "utf8")}"'
+            response = f'{ha1}:{request.authentication["nonce"]}:{ha2}'.encode('utf8')
+            request.authentication["response"] = hashlib.md5(response).hexdigest().encode('utf8')
 
-        debug('DEBUG', f'{inspect.stack()[1][0].f_locals["self"].__class__.__name__}.{inspect.stack()[1][3]} values '
-                       f'ha1 {ha1} ha2 {ha2} nonce {nonce} response {response}  realm {realm} '
-                       f'username {self.username} passwd {self.password} qop {request.authentication["qop"]}')
+        return self.create_authorization_response(request)
 
-        return response
+    def create_authorization_response(self, request) -> str:
+        debug('INFO', f'{self.__class__.__name__}.{inspect.stack()[0][3]} called from '
+                      f'{inspect.stack()[1][0].f_locals["self"].__class__.__name__}.{inspect.stack()[1][3]} start')
+
+        authorization = f'Authorization: Digest username="{self.username}",' \
+                        f'realm="{request.authentication["realm"]}",nonce="{request.authentication["nonce"]}",' \
+                        f'uri="sip:{self.sip_server.get_address()};transport=UDP",'
+
+        if request.authentication.get('qop') and ("auth" or "auth-int") in request.authentication.get('qop'):
+            authorization += f'qop="auth",' if ("auth" or "auth-int") in request.authentication.get('qop') else ""
+            authorization += f'nc="{request.authentication["nonce_count"]:08x}",' if request.authentication.get(
+                'nonce_count') else ""
+            authorization += f'cnonce="{request.authentication["cnonce"]}",' if request.authentication.get(
+                'cnonce') else ""
+
+        authorization += f'response="{str(request.authentication["response"], "utf8")}",algorithm=MD5\r\n'
+
+        debug('DEBUG', f'{inspect.stack()[1][0].f_locals["self"].__class__.__name__}.{inspect.stack()[1][3]} '
+                       f'authorization {authorization}')
+
+        return authorization
 
     def gen_branch(self, length=32) -> str:
         debug('INFO', f'{self.__class__.__name__}.{inspect.stack()[0][3]} called from '
@@ -1091,9 +1105,6 @@ class SIPClient:
     def gen_register(self, request: SIPMessage, deregister=False) -> str:
         debug('INFO', f'{self.__class__.__name__}.{inspect.stack()[0][3]} called from '
                       f'{inspect.stack()[1][0].f_locals["self"].__class__.__name__}.{inspect.stack()[1][3]} start')
-        response = self.gen_authorization(request)
-        nonce = request.authentication['nonce']
-        realm = request.authentication['realm']
 
         reg_request = f'REGISTER sip:{self.sip_server.get_address()} SIP/2.0\r\n' \
                       f'Via: SIP/2.0/UDP {self.sip_client.get_address()}:{self.sip_client.get_port()};branch=' \
@@ -1115,10 +1126,7 @@ class SIPClient:
                       f'User-Agent: pyVoIP {pyVoIP.__version__}\r\n' \
                       f'Expires: ' \
                       f'{self.default_expires if not deregister else 0}\r\n' \
-                      f'Authorization: Digest username="{self.username}",' \
-                      f'realm="{realm}",nonce="{nonce}",' \
-                      f'uri="sip:{self.sip_server.get_address()};transport=UDP",' \
-                      f'{response},algorithm=MD5\r\n' \
+                      f'{self.gen_authorization(request)}' \
                       f'Content-Length: 0' \
                       f'\r\n\r\n'
 
