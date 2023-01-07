@@ -56,11 +56,11 @@ def answer(call):
 
 
 if __name__ == '__main__':
-    server = Connection('sip2sip.info', 5060)
+    server = Connection('server.net', 5060)
     client = Connection('192.168.188.68', 5060)
-    proxy = Connection('proxy.sipthor.net', 5060)
+    proxy = Connection('proxy.server.net', 5060)
 
-    phone = VoIPPhone(server, "xyc1112", "c4H46uu3BGLdpVV", client, proxy, callCallback=answer, rtpPortLow=7079,
+    phone = VoIPPhone(server, "user", "passwd", client, proxy, callCallback=answer, rtpPortLow=7079,
                       rtpPortHigh=7096, behind_nat=True)
     phone.start()
     input('\n************************************\nPress enter to disable the phone'
